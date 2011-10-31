@@ -1,0 +1,12 @@
+diff --git i/epan/dissectors/Makefile.common w/epan/dissectors/Makefile.common
+index def3130..278e50f 100644
+--- i/epan/dissectors/Makefile.common
++++ w/epan/dissectors/Makefile.common
+@@ -105,6 +105,7 @@ ASN1_DISSECTOR_SRC = \
+ 	packet-cmp.c \
+ 	packet-cms.c \
+ 	packet-coap.c \
++	packet-couchbase.c \
+ 	packet-credssp.c \
+ 	packet-crmf.c \
+ 	packet-dap.c \
