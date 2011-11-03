@@ -63,7 +63,7 @@
 #define PFNAME "couchbase"
 
 #define COUCHBASE_PORT        11210
-#define MEMCACHE_HEADER_LEN   24
+#define COUCHBASE_HEADER_LEN   24
 
 /* Magic Byte */
 #define MAGIC_REQUEST         0x80
@@ -121,13 +121,13 @@ static int proto_couchbase = -1;
 
 static int hf_magic = -1;
 static int hf_opcode = -1;
-static int hf_extras_length = -1;
-static int hf_key_length = -1;
+static int hf_extlength = -1;
+static int hf_keylength = -1;
 static int hf_value_length = -1;
-static int hf_data_type = -1;
+static int hf_datatype = -1;
 static int hf_reserved = -1;
 static int hf_status = -1;
-static int hf_total_body_length = -1;
+static int hf_total_bodylength = -1;
 static int hf_opaque = -1;
 static int hf_cas = -1;
 static int hf_extras = -1;
@@ -156,7 +156,7 @@ static int hf_slabclass = -1;
 static int hf_name = -1;
 static int hf_name_value = -1;
 
-static gint ett_memcache = -1;
+static gint ett_couchbase = -1;
 static gint ett_extras = -1;
 
 static const value_string magic_vals[] = {
@@ -209,26 +209,26 @@ static const value_string opcode_vals[] = {
   { 0, NULL }
 };
 
-static const value_string data_type_vals[] = {
+static const value_string datatype_vals[] = {
   { DT_RAW_BYTES,          "Raw bytes"          },
   { 0, NULL }
 };
 
-/* memcache message types. */
-typedef enum _memcache_type {
-  MEMCACHE_REQUEST,
-  MEMCACHE_RESPONSE,
-  MEMCACHE_UNKNOWN
-} memcache_type_t;
+/* couchbase message types. */
+typedef enum _couchbase_type {
+  COUCHBASE_REQUEST,
+  COUCHBASE_RESPONSE,
+  COUCHBASE_UNKNOWN
+} couchbase_type_t;
 
 /* couchbase direct port */
 static guint couchbase_tcp_port = COUCHBASE_PORT;
 
-/* desegmentation of MEMCACHE header */
-static gboolean memcache_desegment_headers = TRUE;
+/* desegmentation of COUCHBASE header */
+static gboolean couchbase_desegment_headers = TRUE;
 
-/* desegmentation of MEMCACHE payload */
-static gboolean memcache_desegment_body = TRUE;
+/* desegmentation of COUCHBASE payload */
+static gboolean couchbase_desegment_body = TRUE;
 
 /* should refer to either the request or the response dissector.
  */
@@ -240,24 +240,24 @@ typedef int (*ReqRespDissector)(tvbuff_t*, packet_info *, proto_tree *,
  */
 static int
 is_memcache_request_or_reply(const gchar *data, int linelen, guint8 *opcode,
-                             memcache_type_t *type, int *expect_content_length,
+                             couchbase_type_t *type, int *expect_content_length,
                              ReqRespDissector *reqresp_dissector);
 
 static guint
 get_memcache_pdu_len (packet_info *pinfo _U_, tvbuff_t *tvb, int offset)
 {
-  guint32 body_len;
+  guint32 bodylen;
 
   /* Get the length of the memcache body */
-  body_len = tvb_get_ntohl(tvb, offset+8);
+  bodylen = tvb_get_ntohl(tvb, offset+8);
 
   /* That length doesn't include the header; add that in */
-  return body_len + MEMCACHE_HEADER_LEN;
+  return bodylen + COUCHBASE_HEADER_LEN;
 }
 
 static void
 dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
-                gint offset, guint8 extras_len, guint8 opcode, gboolean request)
+                gint offset, guint8 extlen, guint8 opcode, gboolean request)
 {
   proto_tree *extras_tree = NULL;
   proto_item *extras_item = NULL, *ti;
@@ -265,8 +265,8 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
   gboolean    illegal = FALSE;  /* Set when extras shall not be present */
   gboolean    missing = FALSE;  /* Set when extras is missing */
 
-  if (extras_len) {
-    extras_item = proto_tree_add_item (tree, hf_extras, tvb, offset, extras_len, ENC_NA);
+  if (extlen) {
+    extras_item = proto_tree_add_item (tree, hf_extras, tvb, offset, extlen, ENC_NA);
     extras_tree = proto_item_add_subtree (extras_item, ett_extras);
   }
 
@@ -276,7 +276,7 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
   case OP_GET_Q:
   case OP_GET_K:
   case OP_GET_K_Q:
-    if (extras_len) {
+    if (extlen) {
       if (request) {
         /* Request shall not have extras */
         illegal = TRUE;
@@ -296,7 +296,7 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
   case OP_ADD_Q:
   case OP_REPLACE:
   case OP_REPLACE_Q:
-    if (extras_len) {
+    if (extlen) {
       if (request) {
         proto_tree_add_item (extras_tree, hf_extras_flags, tvb, offset, 4, ENC_BIG_ENDIAN);
         offset += 4;
@@ -317,7 +317,7 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
   case OP_INCREMENT_Q:
   case OP_DECREMENT:
   case OP_DECREMENT_Q:
-    if (extras_len) {
+    if (extlen) {
       if (request) {
         proto_tree_add_item (extras_tree, hf_extras_delta, tvb, offset, 8, ENC_BIG_ENDIAN);
         offset += 8;
@@ -339,7 +339,7 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
 
   case OP_FLUSH:
   case OP_FLUSH_Q:
-    if (extras_len) {
+    if (extlen) {
       proto_tree_add_item (extras_tree, hf_extras_expiration, tvb, offset, 4, ENC_BIG_ENDIAN);
       offset += 4;
     }
@@ -356,26 +356,26 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
   case OP_PREPEND_Q:
   case OP_STAT:
     /* Must not have extras */
-    if (extras_len) {
+    if (extlen) {
       illegal = TRUE;
     }
     break;
 
   default:
-    if (extras_len) {
+    if (extlen) {
       /* Decode as unknown extras */
-      proto_tree_add_item (extras_tree, hf_extras_unknown, tvb, offset, extras_len, ENC_NA);
-      offset += extras_len;
+      proto_tree_add_item (extras_tree, hf_extras_unknown, tvb, offset, extlen, ENC_NA);
+      offset += extlen;
     }
     break;
   }
 
   if (illegal) {
-    ti = proto_tree_add_item (extras_tree, hf_extras_unknown, tvb, offset, extras_len, ENC_NA);
+    ti = proto_tree_add_item (extras_tree, hf_extras_unknown, tvb, offset, extlen, ENC_NA);
     expert_add_info_format (pinfo, ti, PI_UNDECODED, PI_WARN, "%s %s shall not have Extras",
                             val_to_str (opcode, opcode_vals, "Opcode %d"),
                             request ? "Request" : "Response");
-    offset += extras_len;
+    offset += extlen;
   } else if (missing) {
     ti = proto_tree_add_item (tree, hf_extras_missing, tvb, offset, 0, ENC_NA);
     expert_add_info_format (pinfo, ti, PI_UNDECODED, PI_WARN, "%s %s must have Extras",
@@ -383,7 +383,7 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
                             request ? "Request" : "Response");
   }
 
-  if ((offset - save_offset) != extras_len) {
+  if ((offset - save_offset) != extlen) {
     expert_add_info_format (pinfo, extras_item, PI_UNDECODED, PI_WARN,
                             "Illegal Extras length, should be %d", offset - save_offset);
   }
@@ -391,19 +391,19 @@ dissect_extras (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
 
 static void
 dissect_key (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
-             gint offset, int key_len, guint8 opcode, gboolean request)
+             gint offset, int keylen, guint8 opcode, gboolean request)
 {
   proto_item *ti = NULL;
   gboolean    illegal = FALSE;  /* Set when key shall not be present */
   gboolean    missing = FALSE;  /* Set when key is missing */
 
-  if (key_len) {
-    ti = proto_tree_add_item (tree, hf_key, tvb, offset, key_len, ENC_ASCII|ENC_NA);
-    offset += key_len;
+  if (keylen) {
+    ti = proto_tree_add_item (tree, hf_key, tvb, offset, keylen, ENC_ASCII|ENC_NA);
+    offset += keylen;
   }
 
   /* Sanity check */
-  if (key_len) {
+  if (keylen) {
     if ((opcode == OP_QUIT) || (opcode == OP_QUIT_Q) || (opcode == OP_NO_OP) || (opcode == OP_VERSION)) {
       /* Request and Response must not have key */
       illegal = TRUE;
@@ -516,22 +516,22 @@ dissect_value (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
 static void
 dissect_couchbase (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 {
-  proto_tree *memcache_tree;
-  proto_item *memcache_item, *ti;
+  proto_tree *couchbase_tree;
+  proto_item *couchbase_item, *ti;
   gint        offset = 0;
-  guint8      magic, opcode, extras_len;
-  guint16     key_len, status = 0;
-  guint32     body_len, value_len;
+  guint8      magic, opcode, extlen;
+  guint16     keylen, status = 0;
+  guint32     bodylen, value_len;
   gboolean    request;
 
   col_set_str (pinfo->cinfo, COL_PROTOCOL, PSNAME);
   col_clear (pinfo->cinfo, COL_INFO);
 
-  memcache_item = proto_tree_add_item (tree, proto_couchbase, tvb, offset, -1, ENC_NA);
-  memcache_tree = proto_item_add_subtree (memcache_item, ett_memcache);
+  couchbase_item = proto_tree_add_item (tree, proto_couchbase, tvb, offset, -1, ENC_NA);
+  couchbase_tree = proto_item_add_subtree (couchbase_item, ett_couchbase);
 
   magic = tvb_get_guint8 (tvb, offset);
-  ti = proto_tree_add_item (memcache_tree, hf_magic, tvb, offset, 1, ENC_BIG_ENDIAN);
+  ti = proto_tree_add_item (couchbase_tree, hf_magic, tvb, offset, 1, ENC_BIG_ENDIAN);
   offset += 1;
 
   if (match_strval (magic, magic_vals) == NULL) {
@@ -539,35 +539,35 @@ dissect_couchbase (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
   }
 
   opcode = tvb_get_guint8 (tvb, offset);
-  ti = proto_tree_add_item (memcache_tree, hf_opcode, tvb, offset, 1, ENC_BIG_ENDIAN);
+  ti = proto_tree_add_item (couchbase_tree, hf_opcode, tvb, offset, 1, ENC_BIG_ENDIAN);
   offset += 1;
 
   if (match_strval (opcode, opcode_vals) == NULL) {
     expert_add_info_format (pinfo, ti, PI_UNDECODED, PI_WARN, "Unknown opcode: %d", opcode);
   }
 
-  proto_item_append_text (memcache_item, ", %s %s", val_to_str (opcode, opcode_vals, "Unknown opcode (%d)"),
+  proto_item_append_text (couchbase_item, ", %s %s", val_to_str (opcode, opcode_vals, "Unknown opcode (%d)"),
                           val_to_str (magic, magic_vals, "Unknown magic (%d)"));
 
   col_append_fstr (pinfo->cinfo, COL_INFO, "%s %s",
                    val_to_str (opcode, opcode_vals, "Unknown opcode (%d)"),
                    val_to_str (magic, magic_vals, "Unknown magic (%d)"));
 
-  key_len = tvb_get_ntohs (tvb, offset);
-  proto_tree_add_item (memcache_tree, hf_key_length, tvb, offset, 2, ENC_BIG_ENDIAN);
+  keylen = tvb_get_ntohs (tvb, offset);
+  proto_tree_add_item (couchbase_tree, hf_keylength, tvb, offset, 2, ENC_BIG_ENDIAN);
   offset += 2;
 
-  extras_len = tvb_get_guint8 (tvb, offset);
-  proto_tree_add_item (memcache_tree, hf_extras_length, tvb, offset, 1, ENC_BIG_ENDIAN);
+  extlen = tvb_get_guint8 (tvb, offset);
+  proto_tree_add_item (couchbase_tree, hf_extlength, tvb, offset, 1, ENC_BIG_ENDIAN);
   offset += 1;
 
-  proto_tree_add_item (memcache_tree, hf_data_type, tvb, offset, 1, ENC_BIG_ENDIAN);
+  proto_tree_add_item (couchbase_tree, hf_datatype, tvb, offset, 1, ENC_BIG_ENDIAN);
   offset += 1;
 
   status = tvb_get_ntohs (tvb, offset);
   if (magic & 0x01) {    /* We suppose this is a response, even when unknown magic byte */
     request = FALSE;
-    ti = proto_tree_add_item (memcache_tree, hf_status, tvb, offset, 2, ENC_BIG_ENDIAN);
+    ti = proto_tree_add_item (couchbase_tree, hf_status, tvb, offset, 2, ENC_BIG_ENDIAN);
     if (status != 0) {
       expert_add_info_format (pinfo, ti, PI_RESPONSE_CODE, PI_NOTE, "%s: %s",
                               val_to_str (opcode, opcode_vals, "Unknown opcode (%d)"),
@@ -575,44 +575,44 @@ dissect_couchbase (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
     }
   } else {
     request = TRUE;
-    ti = proto_tree_add_item (memcache_tree, hf_reserved, tvb, offset, 2, ENC_BIG_ENDIAN);
+    ti = proto_tree_add_item (couchbase_tree, hf_reserved, tvb, offset, 2, ENC_BIG_ENDIAN);
     if (status != 0) {
       expert_add_info_format (pinfo, ti, PI_UNDECODED, PI_WARN, "Reserved value: %d", status);
     }
   }
   offset += 2;
 
-  body_len = tvb_get_ntohl (tvb, offset);
-  value_len = body_len - extras_len - key_len;
-  ti = proto_tree_add_uint (memcache_tree, hf_value_length, tvb, offset, 0, value_len);
+  bodylen = tvb_get_ntohl (tvb, offset);
+  value_len = bodylen - extlen - keylen;
+  ti = proto_tree_add_uint (couchbase_tree, hf_value_length, tvb, offset, 0, value_len);
   PROTO_ITEM_SET_GENERATED (ti);
 
-  proto_tree_add_item (memcache_tree, hf_total_body_length, tvb, offset, 4, ENC_BIG_ENDIAN);
+  proto_tree_add_item (couchbase_tree, hf_total_bodylength, tvb, offset, 4, ENC_BIG_ENDIAN);
   offset += 4;
 
-  proto_tree_add_item (memcache_tree, hf_opaque, tvb, offset, 4, ENC_BIG_ENDIAN);
+  proto_tree_add_item (couchbase_tree, hf_opaque, tvb, offset, 4, ENC_BIG_ENDIAN);
   offset += 4;
 
-  proto_tree_add_item (memcache_tree, hf_cas, tvb, offset, 8, ENC_BIG_ENDIAN);
+  proto_tree_add_item (couchbase_tree, hf_cas, tvb, offset, 8, ENC_BIG_ENDIAN);
   offset += 8;
 
   if (status == 0) {
-    dissect_extras (tvb, pinfo, memcache_tree, offset, extras_len, opcode, request);
-    offset += extras_len;
+    dissect_extras (tvb, pinfo, couchbase_tree, offset, extlen, opcode, request);
+    offset += extlen;
 
-    dissect_key (tvb, pinfo, memcache_tree, offset, key_len, opcode, request);
-    offset += key_len;
+    dissect_key (tvb, pinfo, couchbase_tree, offset, keylen, opcode, request);
+    offset += keylen;
 
-    dissect_value (tvb, pinfo, memcache_tree, offset, value_len, opcode, request);
+    dissect_value (tvb, pinfo, couchbase_tree, offset, value_len, opcode, request);
     offset += value_len;
-  } else if (body_len) {
-    proto_tree_add_item (memcache_tree, hf_value, tvb, offset, body_len, ENC_ASCII|ENC_NA);
-    offset += body_len;
+  } else if (bodylen) {
+    proto_tree_add_item (couchbase_tree, hf_value, tvb, offset, bodylen, ENC_ASCII|ENC_NA);
+    offset += bodylen;
 
     col_append_fstr (pinfo->cinfo, COL_INFO, " (%s)",
                      val_to_str (status, status_vals, "Unknown status: %d"));
   } else {
-    ti = proto_tree_add_item (memcache_tree, hf_value_missing, tvb, offset, 0, ENC_NA);
+    ti = proto_tree_add_item (couchbase_tree, hf_value_missing, tvb, offset, 0, ENC_NA);
     expert_add_info_format (pinfo, ti, PI_UNDECODED, PI_WARN, "%s with status %s (%d) must have Value",
                             val_to_str (opcode, opcode_vals, "Opcode %d"),
                             val_to_str (status, status_vals, "Unknown"), status);
@@ -711,7 +711,7 @@ static gboolean
 memcache_req_resp_hdrs_do_reassembly (
     tvbuff_t *tvb, const int offset, packet_info *pinfo,
     const gboolean desegment_headers, const gboolean desegment_body,
-    const memcache_type_t type, const int expect_content_length)
+    const couchbase_type_t type, const int expect_content_length)
 {
   int       linelen;
   gint      next_offset;
@@ -770,7 +770,7 @@ memcache_req_resp_hdrs_do_reassembly (
     if (expect_content_length == TRUE) {
       switch (type) {
 
-      case MEMCACHE_REQUEST:
+      case COUCHBASE_REQUEST:
         /* Get the fifth token in the header.*/
         ret = get_payload_length (tvb, 5 , offset, &content_length, &content_length_found);
         if (!ret) {
@@ -778,7 +778,7 @@ memcache_req_resp_hdrs_do_reassembly (
         }
         break;
 
-      case MEMCACHE_RESPONSE:
+      case COUCHBASE_RESPONSE:
         /* Get the fourth token in the header.*/
         ret =  get_payload_length (tvb, 4 , offset, &content_length, &content_length_found);
         if (!ret) {
@@ -819,10 +819,10 @@ dissect_memcache_message (tvbuff_t *tvb, int offset, packet_info *pinfo, proto_t
   gint               next_offset;
 
   gboolean           is_request_or_reply;
-  memcache_type_t    memcache_type;
+  couchbase_type_t    memcache_type;
   ReqRespDissector   reqresp_dissector  = NULL;
-  proto_tree        *memcache_tree      = NULL;
-  proto_item        *memcache_item      = NULL;
+  proto_tree        *couchbase_tree      = NULL;
+  proto_item        *couchbase_item      = NULL;
   guint8             opcode = 0xff; /* set to something that is not in the list. */
 
   /* Find a line end in the packet.
@@ -840,7 +840,7 @@ dissect_memcache_message (tvbuff_t *tvb, int offset, packet_info *pinfo, proto_t
   line = tvb_get_ptr (tvb, offset, first_linelen);
   lineend = line + first_linelen;
 
-  memcache_type = MEMCACHE_UNKNOWN; /* packet type not known yet */
+  memcache_type = COUCHBASE_UNKNOWN; /* packet type not known yet */
 
   /* Look at the first token of the first line to
    * determine if it is a request or a response?
@@ -854,8 +854,8 @@ dissect_memcache_message (tvbuff_t *tvb, int offset, packet_info *pinfo, proto_t
     /* Yes, it is a request or a response.
      * Do header and body desegmentation if we've been told to.
      */
-    if (!memcache_req_resp_hdrs_do_reassembly (tvb, offset, pinfo, memcache_desegment_headers,
-                                               memcache_desegment_body, memcache_type,
+    if (!memcache_req_resp_hdrs_do_reassembly (tvb, offset, pinfo, couchbase_desegment_headers,
+                                               couchbase_desegment_body, memcache_type,
                                                expect_content_length))
     {
       /* More data needed for desegmentation. */
@@ -875,13 +875,13 @@ dissect_memcache_message (tvbuff_t *tvb, int offset, packet_info *pinfo, proto_t
     col_add_fstr (pinfo->cinfo, COL_INFO, "%s ",
                  format_text (line, first_linelen));
   } else {
-    col_set_str (pinfo->cinfo, COL_INFO, "MEMCACHE Continuation");
+    col_set_str (pinfo->cinfo, COL_INFO, "COUCHBASE Continuation");
   }
 
   orig_offset = offset;
 
-  memcache_item = proto_tree_add_item (tree, proto_couchbase, tvb, offset, -1, ENC_NA);
-  memcache_tree = proto_item_add_subtree (memcache_item, ett_memcache);
+  couchbase_item = proto_tree_add_item (tree, proto_couchbase, tvb, offset, -1, ENC_NA);
+  couchbase_tree = proto_item_add_subtree (couchbase_item, ett_couchbase);
 
   /* Process the packet data. The first line is expected to be a
    * header. If its not a header then we don't dissect.
@@ -892,7 +892,7 @@ dissect_memcache_message (tvbuff_t *tvb, int offset, packet_info *pinfo, proto_t
     /* Dissect a request or a response. */
     if (is_request_or_reply && reqresp_dissector) {
       if (tree) {
-        next_offset = reqresp_dissector (tvb, pinfo, memcache_tree,
+        next_offset = reqresp_dissector (tvb, pinfo, couchbase_tree,
                                          offset, line, lineend, opcode);
         if (next_offset == -1) {
           /* Error in dissecting. */
@@ -905,7 +905,7 @@ dissect_memcache_message (tvbuff_t *tvb, int offset, packet_info *pinfo, proto_t
 
   /*
    * If a 'bytes' value was supplied, the amount of data to be
-   * processed as MEMCACHE payload is the minimum of the 'bytes'
+   * processed as COUCHBASE payload is the minimum of the 'bytes'
    * value and the amount of data remaining in the frame.
    *
    */
@@ -1699,7 +1699,7 @@ memcache_request_dissector (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
  */
 static int
 is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
-                             memcache_type_t *type, int *expect_content_length,
+                             couchbase_type_t *type, int *expect_content_length,
                              ReqRespDissector *reqresp_dissector)
 {
   const guchar *ptr = (const guchar *)data;
@@ -1719,14 +1719,14 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   switch (indx) {
   case 2:
     if (strncmp (data, "OK", indx) == 0) {
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     }
     break;
 
   case 3:
     if (strncmp (data, "END", indx) == 0) {
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     }
     break;
@@ -1734,7 +1734,7 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 4:
     if (strncmp (data, "STAT", indx) == 0) {
       *opcode = OP_STAT;
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     }
     break;
@@ -1742,7 +1742,7 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 5:
     if (strncmp (data, "VALUE", indx) == 0) {
       *opcode = OP_GET;
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       *expect_content_length = TRUE;
       is_request_or_response = TRUE;
     }
@@ -1751,7 +1751,7 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 6:
     if (strncmp (data, "EXISTS", indx) == 0 ||
         strncmp (data, "STORED", indx) == 0) {
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     }
     break;
@@ -1759,25 +1759,25 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 7:
     if (strncmp (data, "VERSION", indx) == 0) {
       *opcode = OP_VERSION;
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "DELETED", indx) == 0) {
       *opcode = OP_DELETE;
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     }
     break;
 
   case 9:
     if (strncmp (data, "NOT_FOUND", indx) == 0) {
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     }
     break;
 
   case 10:
     if (strncmp (data, "NOT_STORED", indx) == 0) {
-      *type = MEMCACHE_RESPONSE;
+      *type = COUCHBASE_RESPONSE;
       is_request_or_response = TRUE;
     }
     break;
@@ -1796,21 +1796,21 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 3:
     if (strncmp (data, "get", indx) == 0) {
       *opcode = OP_GET;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "set", indx) == 0) {
       *opcode = OP_SET;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       *expect_content_length = TRUE;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "add", indx) == 0) {
       *opcode = OP_ADD;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       *expect_content_length = TRUE;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "cas", indx) == 0) {
       *opcode = OP_CAS;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       *expect_content_length = TRUE;
       is_request_or_response = TRUE;
     }
@@ -1819,19 +1819,19 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 4:
     if (strncmp (data, "gets", indx) == 0) {
       *opcode = OP_GETS;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "incr", indx) == 0) {
       *opcode = OP_INCREMENT;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "decr", indx) == 0) {
       *opcode = OP_DECREMENT;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "quit", indx) == 0) {
       *opcode = OP_QUIT;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     }
     break;
@@ -1839,7 +1839,7 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 5:
     if (strncmp (data, "stats", indx) == 0) {
       *opcode = OP_STAT;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     }
     break;
@@ -1847,12 +1847,12 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 6:
     if (strncmp (data, "append", indx) == 0) {
       *opcode = OP_APPEND;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       *expect_content_length = TRUE;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "delete", indx) == 0) {
       *opcode = OP_DELETE;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     }
     break;
@@ -1860,17 +1860,17 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 7:
     if (strncmp (data, "replace", indx) == 0) {
       *opcode = OP_REPLACE;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       *expect_content_length = TRUE;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "prepend", indx) == 0) {
       *opcode = OP_PREPEND;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       *expect_content_length = TRUE;
       is_request_or_response = TRUE;
     } else if (strncmp (data, "version", indx) == 0) {
       *opcode = OP_VERSION;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     }
     break;
@@ -1878,7 +1878,7 @@ is_memcache_request_or_reply (const gchar *data, int linelen, guint8 *opcode,
   case 9:
     if (strncmp (data, "flush_all", indx) == 0) {
       *opcode = OP_FLUSH;
-      *type = MEMCACHE_REQUEST;
+      *type = COUCHBASE_REQUEST;
       is_request_or_response = TRUE;
     }
     break;
@@ -1916,8 +1916,8 @@ dissect_memcache_text (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 
     /*
      * OK, we've set the Protocol and Info columns for the
-     * first MEMCACHE message; set a fence so that subsequent
-     * MEMCACHE messages don't overwrite the Info column.
+     * first COUCHBASE message; set a fence so that subsequent
+     * COUCHBASE messages don't overwrite the Info column.
      */
     col_set_fence (pinfo->cinfo, COL_INFO);
   }
@@ -1933,7 +1933,7 @@ dissect_couchbase_tcp (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
   magic = tvb_get_guint8 (tvb, offset);
 
   if (match_strval (magic, magic_vals) != NULL) {
-    tcp_dissect_pdus (tvb, pinfo, tree, memcache_desegment_body, 12,
+    tcp_dissect_pdus (tvb, pinfo, tree, couchbase_desegment_body, 12,
                       get_memcache_pdu_len, dissect_couchbase);
   } else {
     dissect_memcache_text (tvb, pinfo, tree);
@@ -1974,12 +1974,12 @@ proto_register_couchbase (void)
         FT_UINT8, BASE_DEC, VALS (opcode_vals), 0x0,
         "Command code", HFILL } },
 
-    { &hf_extras_length,
+    { &hf_extlength,
       { "Extras length", "couchbase.extras.length",
         FT_UINT8, BASE_DEC, NULL, 0x0,
         "Length in bytes of the command extras", HFILL } },
 
-    { &hf_key_length,
+    { &hf_keylength,
       { "Key Length", "couchbase.key.length",
         FT_UINT16, BASE_DEC, NULL, 0x0,
         "Length in bytes of the text key that follows the command extras", HFILL } },
@@ -1989,9 +1989,9 @@ proto_register_couchbase (void)
         FT_UINT32, BASE_DEC, NULL, 0x0,
         "Length in bytes of the value that follows the key", HFILL } },
 
-    { &hf_data_type,
-      { "Data type", "couchbase.data_type",
-        FT_UINT8, BASE_DEC, VALS (data_type_vals), 0x0,
+    { &hf_datatype,
+      { "Data type", "couchbase.datatype",
+        FT_UINT8, BASE_DEC, VALS (datatype_vals), 0x0,
         NULL, HFILL } },
 
     { &hf_reserved,
@@ -2004,8 +2004,8 @@ proto_register_couchbase (void)
         FT_UINT16, BASE_DEC, VALS (status_vals), 0x0,
         "Status of the response", HFILL } },
 
-    { &hf_total_body_length,
-      { "Total body length", "couchbase.total_body_length",
+    { &hf_total_bodylength,
+      { "Total body length", "couchbase.total_bodylength",
         FT_UINT32, BASE_DEC, NULL, 0x0,
         "Length in bytes of extra + key + value", HFILL } },
 
@@ -2131,7 +2131,7 @@ proto_register_couchbase (void)
   };
 
   static gint *ett[] = {
-    &ett_memcache,
+    &ett_couchbase,
     &ett_extras
   };
 
@@ -2148,12 +2148,12 @@ proto_register_couchbase (void)
   couchbase_module = prefs_register_protocol (proto_couchbase, NULL);
 
   prefs_register_bool_preference (couchbase_module, "desegment_headers",
-                                 "Reassemble MEMCACHE headers spanning multiple TCP segments",
-                                 "Whether the MEMCACHE dissector should reassemble headers "
+                                 "Reassemble COUCHBASE headers spanning multiple TCP segments",
+                                 "Whether the COUCHBASE dissector should reassemble headers "
                                  "of a request spanning multiple TCP segments. "
                                  "To use this option, you must also enable "
                                  "\"Allow subdissectors to reassemble TCP streams\" in the TCP protocol settings.",
-                                 &memcache_desegment_headers);
+                                 &couchbase_desegment_headers);
 
   prefs_register_bool_preference (couchbase_module, "desegment_pdus",
                                   "Reassemble PDUs spanning multiple TCP segments",
@@ -2161,7 +2161,7 @@ proto_register_couchbase (void)
                                   " spanning multiple TCP segments."
                                   " To use this option, you must also enable \"Allow subdissectors"
                                   " to reassemble TCP streams\" in the TCP protocol settings.",
-                                  &memcache_desegment_body);
+                                  &couchbase_desegment_body);
 
   prefs_register_uint_preference (couchbase_module, "tcp.port", "COUCHBASE TCP Port",
                                   "COUCHBASE TCP port if other than the default",
@@ -2172,14 +2172,14 @@ proto_register_couchbase (void)
 void
 proto_reg_handoff_couchbase (void)
 {
-  dissector_handle_t memcache_tcp_handle;
-  dissector_handle_t memcache_udp_handle;
+  dissector_handle_t couchbase_tcp_handle;
+  dissector_handle_t couchbase_udp_handle;
 
-  memcache_tcp_handle = find_dissector ("couchbase.tcp");
-  memcache_udp_handle = find_dissector ("couchbase.udp");
+  couchbase_tcp_handle = find_dissector ("couchbase.tcp");
+  couchbase_udp_handle = find_dissector ("couchbase.udp");
 
-  dissector_add_uint ("tcp.port", couchbase_tcp_port, memcache_tcp_handle);
-  dissector_add_uint ("udp.port", couchbase_tcp_port, memcache_udp_handle);
+  dissector_add_uint ("tcp.port", couchbase_tcp_port, couchbase_tcp_handle);
+  dissector_add_uint ("udp.port", couchbase_tcp_port, couchbase_udp_handle);
 }
 
 /*
