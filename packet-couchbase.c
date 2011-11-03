@@ -125,7 +125,7 @@ static int hf_extlength = -1;
 static int hf_keylength = -1;
 static int hf_value_length = -1;
 static int hf_datatype = -1;
-static int hf_reserved = -1;
+static int hf_vbucket = -1;
 static int hf_status = -1;
 static int hf_total_bodylength = -1;
 static int hf_opaque = -1;
@@ -575,10 +575,7 @@ dissect_couchbase (tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
     }
   } else {
     request = TRUE;
-    ti = proto_tree_add_item (couchbase_tree, hf_reserved, tvb, offset, 2, ENC_BIG_ENDIAN);
-    if (status != 0) {
-      expert_add_info_format (pinfo, ti, PI_UNDECODED, PI_WARN, "Reserved value: %d", status);
-    }
+    proto_tree_add_item (couchbase_tree, hf_vbucket, tvb, offset, 2, ENC_BIG_ENDIAN);
   }
   offset += 2;
 
@@ -1994,10 +1991,10 @@ proto_register_couchbase (void)
         FT_UINT8, BASE_DEC, VALS (datatype_vals), 0x0,
         NULL, HFILL } },
 
-    { &hf_reserved,
-      { "Reserved", "couchbase.reserved",
+    { &hf_vbucket,
+      { "vBucket", "couchbase.vbucket",
         FT_UINT16, BASE_DEC, NULL, 0x0,
-        "Reserved for future use", HFILL } },
+        "vBucket ID", HFILL } },
 
     { &hf_status,
       { "Status", "couchbase.status",
